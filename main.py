@@ -97,5 +97,6 @@ class StatusListCtrl(wx.ListCtrl, listmix.ListCtrlAutoWidthMixin):
             self.Bind(wx.EVT_MENU, self.on_scatter, scatter_item)
             self.Bind(wx.EVT_MENU, self.on_boxplot, box_item)
             self.Bind(wx.EVT_MENU, self.on_about, about_item)
+            
 
         
