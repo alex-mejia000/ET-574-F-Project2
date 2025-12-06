@@ -97,6 +97,235 @@ class StatusListCtrl(wx.ListCtrl, listmix.ListCtrlAutoWidthMixin):
             self.Bind(wx.EVT_MENU, self.on_scatter, scatter_item)
             self.Bind(wx.EVT_MENU, self.on_boxplot, box_item)
             self.Bind(wx.EVT_MENU, self.on_about, about_item)
-            
+            # =========================
+# STATUS DISPLAY + PAGE LAYOUT
+# This section builds the log area at the bottom of the app where
+# messages appear (like "File loaded" or "Histogram displayed").
+# _layout_widgets organizes the entire window layout.
+# =========================
+    def _make_status_area(self):
+        self.status = StatusListCtrl(self.panel)
+
+    def _layout_widgets(self):
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        main_sizer.Add(self.toolbar_sizer, 0, wx.EXPAND | wx.ALL, 4)
+        main_sizer.Add(self.status, 1, wx.EXPAND | wx.ALL, 8)
+        self.panel.SetSizer(main_sizer)
+
+
+# =========================
+# FILE LOADING FUNCTIONS
+# on_load opens a file-choose window so the user can select a CSV.
+# _load_dataset actually reads the CSV into pandas, cleans columns,
+# sets up dropdown choices, and logs that the file was loaded.
+# =========================
+    def on_load(self, event=None):
+        try:
+            wildcard = "CSV files (*.csv)|*.csv|TSV files (*.tsv;*.txt)|*.tsv;*.txt|All files (*.*)|*.*"
+            dlg = wx.FileDialog(
+                self, message="Choose a dataset file", wildcard=wildcard,
+                style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST
+            )
+
+            if dlg.ShowModal() == wx.ID_OK:
+                path = dlg.GetPath()
+                self._load_dataset(path)
+
+            dlg.Destroy()
+
+        except Exception as e:
+            self._show_error("Error loading file", e)
+
+    def _load_dataset(self, path: str):
+        try:
+            ext = os.path.splitext(path)[1].lower()
+            sep = "\t" if ext in (".tsv", ".txt") else ","
+
+            df = pd.read_csv(path, sep=sep, engine="python", low_memory=False)
+            df.columns = [str(c).strip() for c in df.columns]
+
+            self.dataframe = df
+            self.current_file = path
+            self.file_label.SetLabel(
+                f"Loaded: {os.path.basename(path)} ({len(df)} rows, {len(df.columns)} columns)"
+            )
+
+            numeric_cols = [c for c in df.columns if is_numeric_series(df[c])]
+            other_cols = [c for c in df.columns if c not in numeric_cols]
+            choices = numeric_cols + other_cols
+
+            self.col_x_choice.Clear()
+            self.col_y_choice.Clear()
+
+            if choices:
+                self.col_x_choice.AppendItems(choices)
+                self.col_y_choice.AppendItems(choices)
+
+                if numeric_cols:
+                    self.col_x_choice.SetSelection(0)
+                    if len(numeric_cols) > 1:
+                        self.col_y_choice.SetSelection(1)
+                    else:
+                        self.col_y_choice.SetSelection(0)
+
+            self.status.log(f"Loaded dataset: {path}")
+
+        except Exception as e:
+            self._show_error("Failed to load dataset", e)
+
+
+# =========================
+# BASIC MENU ACTIONS
+# on_exit closes the program.
+# on_about shows a simple popup with information about the project.
+# =========================
+    def on_exit(self, _):
+        self.Close(True)
+
+    def on_about(self, _):
+        wx.MessageBox(
+            "ET-574 Project II\n\nData Visualization Application\nBuilt with wxPython & Matplotlib",
+            "About",
+            wx.OK | wx.ICON_INFORMATION
+        )
+
+
+# =========================
+# HISTOGRAM PLOT
+# Creates a histogram of one selected column.
+# Converts data to numbers if needed, then displays the plot.
+# =========================
+    def on_histogram(self, event=None):
+        try:
+            if self.dataframe is None:
+                wx.MessageBox(
+                    "No dataset loaded. Load a CSV first.",
+                    "Missing Data",
+                    wx.OK | wx.ICON_WARNING
+                )
+                return
+
+            sel = self.col_x_choice.GetSelection()
+            if sel == wx.NOT_FOUND:
+                wx.MessageBox(
+                    "Select a column for the histogram.",
+                    "Missing Column",
+                    wx.OK | wx.ICON_INFORMATION
+                )
+                return
+
+            col = self.col_x_choice.GetString(sel)
+            series = pd.to_numeric(self.dataframe[col], errors="coerce")
+
+            Plotter.popup_hist(series, title=f"Histogram — {col}")
+            self.status.log(f"Histogram displayed for column: {col}")
+
+        except Exception as e:
+            self._show_error("Failed to create histogram", e)
+
+
+# =========================
+# SCATTER PLOT
+# Uses two selected columns (X and Y) and plots them against each other.
+# Good for seeing relationships between two variables.
+# =========================
+    def on_scatter(self, event=None):
+        try:
+            if self.dataframe is None:
+                wx.MessageBox(
+                    "No dataset loaded. Load a CSV first.",
+                    "Missing Data",
+                    wx.OK | wx.ICON_WARNING
+                )
+                return
+
+            sx = self.col_x_choice.GetSelection()
+            sy = self.col_y_choice.GetSelection()
+
+            if sx == wx.NOT_FOUND or sy == wx.NOT_FOUND:
+                wx.MessageBox(
+                    "Select both X and Y columns for scatter plot.",
+                    "Missing Columns",
+                    wx.OK | wx.ICON_INFORMATION
+                )
+                return
+
+            colx = self.col_x_choice.GetString(sx)
+            coly = self.col_y_choice.GetString(sy)
+
+            x = pd.to_numeric(self.dataframe[colx], errors="coerce")
+            y = pd.to_numeric(self.dataframe[coly], errors="coerce")
+
+            mask = x.notna() & y.notna()
+
+            if mask.sum() == 0:
+                raise ValueError("No valid numeric data for scatter plot.")
+
+            Plotter.popup_scatter(x[mask], y[mask], title=f"Scatter — {colx} vs {coly}")
+            self.status.log(f"Scatter plot displayed: {colx} vs {coly}")
+
+        except Exception as e:
+            self._show_error("Failed to create scatter plot", e)
+
+
+# =========================
+# BOXPLOT
+# Shows the distribution of one selected column.
+# Helps identify medians, quartiles, and outliers.
+# =========================
+    def on_boxplot(self, event=None):
+        try:
+            if self.dataframe is None:
+                wx.MessageBox(
+                    "No dataset loaded. Load a CSV first.",
+                    "Missing Data",
+                    wx.OK | wx.ICON_WARNING
+                )
+                return
+
+            sel = self.col_x_choice.GetSelection()
+            if sel == wx.NOT_FOUND:
+                wx.MessageBox(
+                    "Select a column for the boxplot.",
+                    "Missing Column",
+                    wx.OK | wx.ICON_INFORMATION
+                )
+                return
+
+            col = self.col_x_choice.GetString(sel)
+            series = pd.to_numeric(self.dataframe[col], errors="coerce")
+
+            Plotter.popup_box(series, title=f"Boxplot — {col}")
+            self.status.log(f"Boxplot displayed for column: {col}")
+
+        except Exception as e:
+            self._show_error("Failed to create boxplot", e)
+
+
+# =========================
+# ERROR HANDLING
+# If something goes wrong (bad file, wrong column, etc),
+# this shows a popup and logs the error for the user.
+# =========================
+    def _show_error(self, title: str, exc: Exception):
+        tb = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+        self.status.log(f"{title}: {tb}")
+        wx.MessageBox(f"{title}:\n\n{str(exc)}", "Error", wx.OK | wx.ICON_ERROR)
+
+
+# =========================
+# PROGRAM ENTRY POINT
+# main() starts the app by creating the window and running the event loop.
+# =========================
+def main():
+    app = wx.App(False)
+    frame = MainFrame(None)
+    frame.Show(True)
+    app.MainLoop()
+
+
+if __name__ == "__main__":
+    main()
+
 
         
